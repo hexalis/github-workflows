@@ -77,6 +77,8 @@ jobs:
 
 ## Requisitos del servidor (deploy-build)
 
+- **Cuenta de servicio dedicada** (recomendado: `deploy`), sin sudo general; solo acceso a
+  Docker (grupo `docker` o `use-sudo: true`). Mantén el usuario personal como admin.
 - Docker instalado y el usuario de deploy con acceso (`docker` group o `use-sudo: true`).
 - `git` instalado y clon del repo en `remote-path`.
 - Deploy key de solo lectura configurada.
