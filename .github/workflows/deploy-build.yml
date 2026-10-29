@@ -1,0 +1,167 @@
+name: Deploy from repo (build on server, reusable)
+
+on:
+  workflow_call:
+    inputs:
+      host:
+        description: "Host/IP del servidor"
+        required: true
+        type: string
+      user:
+        description: "Usuario SSH"
+        required: true
+        type: string
+      ssh-port:
+        description: "Puerto SSH"
+        type: number
+        default: 22
+      remote-path:
+        description: "Ruta del clon del repo en el servidor"
+        required: true
+        type: string
+      branch:
+        description: "Rama a desplegar"
+        type: string
+        default: "main"
+      container-name:
+        description: "Nombre del contenedor"
+        required: true
+        type: string
+      image-tag:
+        description: "Tag local de la imagen (ej. nasa-api:latest)"
+        type: string
+        default: "nasa-api:latest"
+      dockerfile:
+        description: "Ruta al Dockerfile (relativa a remote-path)"
+        type: string
+        default: "Dockerfile"
+      context:
+        description: "Build context (relativo a remote-path)"
+        type: string
+        default: "."
+      ports:
+        description: "Mapeo de puertos (ej. 8000:8000)"
+        type: string
+        default: "8000:8000"
+      env-file:
+        description: "Ruta del .env en el servidor (opcional)"
+        type: string
+        default: ""
+      health-url:
+        description: "URL de salud a comprobar desde el servidor (opcional)"
+        type: string
+        default: ""
+      use-sudo:
+        description: "Usar sudo para docker (si el usuario no está en el grupo docker)"
+        type: boolean
+        default: false
+      extra-run-args:
+        description: "Argumentos extra para docker run (opcional)"
+        type: string
+        default: ""
+      health-timeout-seconds:
+        description: "Segundos máximos para el healthcheck"
+        type: number
+        default: 120
+    secrets:
+      ssh-private-key:
+        description: "Clave privada SSH (runner → servidor)"
+        required: true
+      known-hosts:
+        description: "known_hosts del servidor (recomendado; si falta se usa ssh-keyscan)"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Prepare SSH
+        shell: bash
+        env:
+          SSH_KEY: ${{ secrets.ssh-private-key }}
+          KNOWN_HOSTS: ${{ secrets.known-hosts }}
+          HOST: ${{ inputs.host }}
+          SSH_PORT: ${{ inputs.ssh-port }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          if [ -n "${KNOWN_HOSTS:-}" ]; then
+            printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          fi
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Pull, build and run on server
+        shell: bash
+        env:
+          HOST: ${{ inputs.host }}
+          USER_NAME: ${{ inputs.user }}
+          SSH_PORT: ${{ inputs.ssh-port }}
+          REMOTE_PATH: ${{ inputs.remote-path }}
+          BRANCH: ${{ inputs.branch }}
+          CONTAINER: ${{ inputs.container-name }}
+          IMAGE_TAG: ${{ inputs.image-tag }}
+          DOCKERFILE: ${{ inputs.dockerfile }}
+          CONTEXT: ${{ inputs.context }}
+          PORTS: ${{ inputs.ports }}
+          ENV_FILE: ${{ inputs.env-file }}
+          HEALTH_URL: ${{ inputs.health-url }}
+          USE_SUDO: ${{ inputs.use-sudo }}
+          EXTRA_ARGS: ${{ inputs.extra-run-args }}
+          HEALTH_TIMEOUT: ${{ inputs.health-timeout-seconds }}
+        run: |
+          set -euo pipefail
+          SSH="ssh -i ~/.ssh/deploy_key -p $SSH_PORT -o BatchMode=yes -o StrictHostKeyChecking=yes"
+          TARGET="$USER_NAME@$HOST"
+          if [ "$USE_SUDO" = "true" ]; then SUDO="sudo"; else SUDO=""; fi
+
+          $SSH "$TARGET" \
+            "REMOTE_PATH='$REMOTE_PATH' BRANCH='$BRANCH' CONTAINER='$CONTAINER' IMAGE_TAG='$IMAGE_TAG' DOCKERFILE='$DOCKERFILE' CONTEXT='$CONTEXT' PORTS='$PORTS' ENV_FILE='$ENV_FILE' HEALTH_URL='$HEALTH_URL' EXTRA_ARGS='$EXTRA_ARGS' HEALTH_TIMEOUT='$HEALTH_TIMEOUT' SUDO='$SUDO' bash -s" <<'REMOTE'
+          set -euo pipefail
+
+          cd "$REMOTE_PATH"
+          git fetch --prune origin
+          git reset --hard "origin/$BRANCH"
+
+          echo "==> building $IMAGE_TAG from $(git rev-parse --short HEAD)"
+          $SUDO docker build -t "$IMAGE_TAG" -f "$DOCKERFILE" "$CONTEXT"
+
+          $SUDO docker stop "$CONTAINER" 2>/dev/null || true
+          $SUDO docker rm "$CONTAINER" 2>/dev/null || true
+
+          ENV_ARG=""
+          if [ -n "$ENV_FILE" ]; then
+            ENV_ARG="--env-file $ENV_FILE"
+          fi
+
+          # shellcheck disable=SC2086
+          $SUDO docker run -d \
+            --name "$CONTAINER" \
+            --restart unless-stopped \
+            -p "$PORTS" \
+            $ENV_ARG \
+            $EXTRA_ARGS \
+            "$IMAGE_TAG"
+
+          if [ -n "$HEALTH_URL" ]; then
+            for i in $(seq 1 "$HEALTH_TIMEOUT"); do
+              if curl -fsS "$HEALTH_URL" >/dev/null 2>&1; then
+                echo "healthy after ${i}s"
+                exit 0
+              fi
+              sleep 1
+            done
+            echo "healthcheck failed after ${HEALTH_TIMEOUT}s" >&2
+            $SUDO docker logs --tail 120 "$CONTAINER" >&2 || true
+            exit 1
+          fi
+
+          echo "deployed (no health check configured)"
+          REMOTE

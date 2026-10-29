@@ -6,13 +6,17 @@ Se llaman con `uses:` desde cada repo; las diferencias se parametrizan con `inpu
 
 ## Workflows disponibles
 
-| Workflow | Qué hace | Entradas principales |
+| Workflow | Qué hace | Cuándo usarlo |
 |---|---|---|
-| `python-ci.yml` | Setup Python + caché pip + instalar + tests | `python-version`, `working-directory`, `requirements-file`, `test-command` |
-| `docker-ghcr.yml` | Build de imagen y push a GHCR (opcional) | `image-name`, `context`, `dockerfile`, `push`, `tags` |
-| `deploy-docker.yml` | SSH al servidor → `docker pull` + recrear contenedor + healthcheck | `host`, `user`, `image`, `container-name`, `ports`, `env-file`, `health-url` |
+| `python-ci.yml` | Setup Python + caché pip + instalar + tests | Siempre |
+| **`deploy-build.yml`** | SSH al VPS → `git fetch/reset` → `docker build` → `docker run` → healthcheck | **Recomendado** si el VPS construye la imagen (sin registry) |
+| `docker-ghcr.yml` | Build y push de imagen a GHCR | Alternativa: artefacto inmutable / varias instancias |
+| `deploy-docker.yml` | SSH → `docker pull` de una imagen publicada → recrear contenedor | Alternativa junto a `docker-ghcr.yml` |
 
-## Uso típico (repo llamador)
+## Flujo recomendado (build en el VPS)
+
+El repo llamador debe tener un `Dockerfile` y un clon del repo en el servidor
+(con una deploy key de solo lectura).
 
 ```yaml
 name: CI/CD
@@ -35,53 +39,47 @@ jobs:
       requirements-file: "backend/requirements.txt"
       test-command: "python -m unittest discover -s tests -v"
 
-  build:
-    needs: ci
-    permissions:
-      contents: read
-      packages: write
-    uses: hexalis/github-workflows/.github/workflows/docker-ghcr.yml@main
-    with:
-      image-name: ghcr.io/hexalis/api-processor
-      dockerfile: "Dockerfile"
-      push: ${{ github.event_name != 'pull_request' }}
-
   deploy:
-    needs: build
+    needs: ci
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-    uses: hexalis/github-workflows/.github/workflows/deploy-docker.yml@main
+    uses: hexalis/github-workflows/.github/workflows/deploy-build.yml@main
     with:
       host: ${{ vars.DEPLOY_HOST }}
       user: ${{ vars.DEPLOY_USER }}
-      image: ghcr.io/hexalis/api-processor:latest
+      remote-path: ${{ vars.DEPLOY_PATH }}
+      branch: main
       container-name: nasa-api
+      image-tag: nasa-api:latest
+      dockerfile: "Dockerfile"
+      context: "."
       ports: "8000:8000"
       env-file: ${{ vars.DEPLOY_ENV_FILE }}
       health-url: "http://127.0.0.1:8000/health"
     secrets:
       ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
-      registry-token: ${{ secrets.GHCR_READ_TOKEN }}
 ```
 
 ## Variables vs. secrets
 
-| Tipo | Ejemplos | Dónde se configuran |
+| Tipo | Ejemplos | Dónde se configura |
 |---|---|---|
-| `inputs` | versión de Python, comando de tests, nombre de imagen, puertos | en el YAML del caller (`with:`) |
-| `vars` | `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_ENV_FILE` | Settings → Variables del repo/org |
-| `secrets` | `DEPLOY_SSH_KEY`, `GHCR_READ_TOKEN` | Settings → Secrets del repo/org |
+| `inputs` | versión Python, comando de tests, puertos, nombre de contenedor | en el YAML del caller (`with:`) |
+| `vars` | `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_PATH`, `DEPLOY_ENV_FILE` | Settings → Variables del repo/org |
+| `secrets` | `DEPLOY_SSH_KEY`, `known-hosts` (opcional) | Settings → Secrets del repo/org |
 
-- **No** pongas claves en `inputs` (quedan visibles en logs).
-- Para GHCR privado, el servidor necesita un token de solo lectura (`read:packages`) en
-  `GHCR_READ_TOKEN`; si el paquete es público, omite ese secret.
-- `known-hosts` (opcional) evita el `ssh-keyscan` y da más seguridad; guárdalo como secret.
+- El servidor necesita, además, una **deploy key de solo lectura** para hacer `git fetch`
+  (se configura en el repo de GitHub y en `core.sshCommand` del clon). No pasa por Actions.
+- `known-hosts` (opcional) evita el `ssh-keyscan`; recomendado en producción.
+- En el modelo con GHCR: el job de build necesita `permissions: packages: write` y el servidor
+  un token `read:packages` (`GHCR_READ_TOKEN`).
 
-## Permisos necesarios
+## Requisitos del servidor (deploy-build)
 
-- El **repo llamador** debe permitir usar workflows reutilizables (organización).
-- El job de build necesita `permissions: packages: write`.
-- La clave SSH debe permitir login al usuario de despliegue y ese usuario debe poder ejecutar
-  Docker (grupo `docker` o `use-sudo: true`).
+- Docker instalado y el usuario de deploy con acceso (`docker` group o `use-sudo: true`).
+- `git` instalado y clon del repo en `remote-path`.
+- Deploy key de solo lectura configurada.
+- `.env` con secretos fuera del repo (ruta en `env-file`).
+- `curl` disponible para el healthcheck.
 
 ## Versionado
 
