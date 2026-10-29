@@ -1,0 +1,158 @@
+name: Deploy Docker over SSH (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      host:
+        description: "Host/IP del servidor"
+        required: true
+        type: string
+      user:
+        description: "Usuario SSH"
+        required: true
+        type: string
+      ssh-port:
+        description: "Puerto SSH"
+        type: number
+        default: 22
+      image:
+        description: "Imagen completa con tag (ej. ghcr.io/org/app:latest)"
+        required: true
+        type: string
+      container-name:
+        description: "Nombre del contenedor"
+        required: true
+        type: string
+      ports:
+        description: "Mapeo de puertos (ej. 8000:8000)"
+        type: string
+        default: "8000:8000"
+      env-file:
+        description: "Ruta del .env en el servidor (opcional)"
+        type: string
+        default: ""
+      health-url:
+        description: "URL de salud a comprobar desde el servidor (opcional)"
+        type: string
+        default: ""
+      registry-host:
+        description: "Registry (ej. ghcr.io)"
+        type: string
+        default: "ghcr.io"
+      registry-username:
+        description: "Usuario del registry (opcional)"
+        type: string
+        default: ""
+      use-sudo:
+        description: "Usar sudo para docker (si el usuario no está en el grupo docker)"
+        type: boolean
+        default: false
+      extra-run-args:
+        description: "Argumentos extra para docker run (opcional)"
+        type: string
+        default: ""
+      health-timeout-seconds:
+        description: "Segundos máximos para el healthcheck"
+        type: number
+        default: 90
+    secrets:
+      ssh-private-key:
+        description: "Clave privada SSH"
+        required: true
+      registry-token:
+        description: "Token de solo lectura para el registry (si la imagen es privada)"
+        required: false
+      known-hosts:
+        description: "known_hosts del servidor (recomendado; si falta se usa ssh-keyscan)"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Prepare SSH
+        shell: bash
+        env:
+          SSH_KEY: ${{ secrets.ssh-private-key }}
+          KNOWN_HOSTS: ${{ secrets.known-hosts }}
+          HOST: ${{ inputs.host }}
+          SSH_PORT: ${{ inputs.ssh-port }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          if [ -n "${KNOWN_HOSTS:-}" ]; then
+            printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          fi
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Deploy
+        shell: bash
+        env:
+          HOST: ${{ inputs.host }}
+          USER_NAME: ${{ inputs.user }}
+          SSH_PORT: ${{ inputs.ssh-port }}
+          IMAGE: ${{ inputs.image }}
+          CONTAINER: ${{ inputs.container-name }}
+          PORTS: ${{ inputs.ports }}
+          ENV_FILE: ${{ inputs.env-file }}
+          HEALTH_URL: ${{ inputs.health-url }}
+          REGISTRY_HOST: ${{ inputs.registry-host }}
+          REGISTRY_USER: ${{ inputs.registry-username }}
+          REGISTRY_TOKEN: ${{ secrets.registry-token }}
+          USE_SUDO: ${{ inputs.use-sudo }}
+          EXTRA_ARGS: ${{ inputs.extra-run-args }}
+          HEALTH_TIMEOUT: ${{ inputs.health-timeout-seconds }}
+        run: |
+          set -euo pipefail
+          SSH="ssh -i ~/.ssh/deploy_key -p $SSH_PORT -o BatchMode=yes -o StrictHostKeyChecking=yes"
+          TARGET="$USER_NAME@$HOST"
+          if [ "$USE_SUDO" = "true" ]; then SUDO="sudo"; else SUDO=""; fi
+
+          if [ -n "${REGISTRY_TOKEN:-}" ]; then
+            printf '%s' "$REGISTRY_TOKEN" | $SSH "$TARGET" "$SUDO docker login '$REGISTRY_HOST' --username '$REGISTRY_USER' --password-stdin"
+          fi
+
+          $SSH "$TARGET" \
+            "IMAGE='$IMAGE' CONTAINER='$CONTAINER' PORTS='$PORTS' ENV_FILE='$ENV_FILE' HEALTH_URL='$HEALTH_URL' EXTRA_ARGS='$EXTRA_ARGS' HEALTH_TIMEOUT='$HEALTH_TIMEOUT' SUDO='$SUDO' bash -s" <<'REMOTE'
+          set -euo pipefail
+          $SUDO docker pull "$IMAGE"
+          $SUDO docker stop "$CONTAINER" 2>/dev/null || true
+          $SUDO docker rm "$CONTAINER" 2>/dev/null || true
+
+          ENV_ARG=""
+          if [ -n "$ENV_FILE" ]; then
+            ENV_ARG="--env-file $ENV_FILE"
+          fi
+
+          # shellcheck disable=SC2086
+          $SUDO docker run -d \
+            --name "$CONTAINER" \
+            --restart unless-stopped \
+            -p "$PORTS" \
+            $ENV_ARG \
+            $EXTRA_ARGS \
+            "$IMAGE"
+
+          if [ -n "$HEALTH_URL" ]; then
+            for i in $(seq 1 "$HEALTH_TIMEOUT"); do
+              if curl -fsS "$HEALTH_URL" >/dev/null 2>&1; then
+                echo "healthy after ${i}s"
+                exit 0
+              fi
+              sleep 1
+            done
+            echo "healthcheck failed after ${HEALTH_TIMEOUT}s" >&2
+            $SUDO docker logs --tail 120 "$CONTAINER" >&2 || true
+            exit 1
+          fi
+
+          echo "deployed (no health check configured)"
+          REMOTE

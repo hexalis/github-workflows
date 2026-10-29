@@ -1,0 +1,64 @@
+name: Python CI (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: "Versión de Python (ej. 3.14)"
+        type: string
+        default: "3.13"
+      working-directory:
+        description: "Directorio de trabajo del repo llamador"
+        type: string
+        default: "."
+      requirements-file:
+        description: "Ruta al requirements.txt (relativa al working-directory)"
+        type: string
+        default: "requirements.txt"
+      install-command:
+        description: "Comando de instalación personalizado (opcional; reemplaza pip install -r)"
+        type: string
+        default: ""
+      test-command:
+        description: "Comando de tests"
+        type: string
+        default: "python -m unittest discover -s tests -v"
+      timeout-minutes:
+        description: "Timeout del job"
+        type: number
+        default: 15
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+          cache: pip
+          cache-dependency-path: ${{ inputs.working-directory }}/${{ inputs.requirements-file }}
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          if [ -n "${{ inputs.install-command }}" ]; then
+            ${{ inputs.install-command }}
+          else
+            pip install -r "${{ inputs.requirements-file }}"
+          fi
+
+      - name: Run tests
+        shell: bash
+        run: ${{ inputs.test-command }}
