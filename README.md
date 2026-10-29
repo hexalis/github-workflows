@@ -87,3 +87,29 @@ jobs:
 
 En producción, en lugar de `@main` conviene etiquetar este repo (`v1`, `v1.2.0`) y llamar
 `@v1`. Así un cambio en los workflows no rompe a todos los repos a la vez.
+
+## Multiambiente
+
+El mismo `deploy-build.yml` sirve para `develop`, `qa` y `production`: se llama una vez por
+rama con distinto `remote-path`, `container-name`, `image-tag`, `ports` y `env-file`.
+Ejemplo de patrón:
+
+```yaml
+jobs:
+  deploy-develop:
+    if: github.ref == 'refs/heads/develop'
+    uses: hexalis/github-workflows/.github/workflows/deploy-build.yml@main
+    with:
+      remote-path: /home/user/app-develop
+      branch: develop
+      container-name: app-develop
+      ports: "127.0.0.1:8001:8000"
+      # ...
+  # deploy-qa y deploy-prod análogos
+```
+
+- Los puertos deben publicarse en `127.0.0.1` si nginx hace proxy.
+- Para saltar tests: variable `SKIP_TESTS=true` en el caller (condición en el job de CI).
+- Si el frontend es estático (sin Dockerfile), se puede servir con nginx y un workflow de
+  `git pull`/rsync; si tiene Dockerfile (Node + nginx), reutiliza `deploy-build.yml` igual que
+  el backend.
