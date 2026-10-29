@@ -57,6 +57,7 @@ jobs:
       health-url: "http://127.0.0.1:8000/health"
     secrets:
       ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+      known-hosts: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
 ```
 
 ## Variables vs. secrets
@@ -65,11 +66,12 @@ jobs:
 |---|---|---|
 | `inputs` | versión Python, comando de tests, puertos, nombre de contenedor | en el YAML del caller (`with:`) |
 | `vars` | `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_PATH`, `DEPLOY_ENV_FILE` | Settings → Variables del repo/org |
-| `secrets` | `DEPLOY_SSH_KEY`, `known-hosts` (opcional) | Settings → Secrets del repo/org |
+| `secrets` | `DEPLOY_SSH_KEY`, `DEPLOY_KNOWN_HOSTS` (opcional) | Settings → Secrets del repo/org |
 
+- En este modelo **no hay token de GHCR**: el deploy construye desde el repo en el VPS.
 - El servidor necesita, además, una **deploy key de solo lectura** para hacer `git fetch`
   (se configura en el repo de GitHub y en `core.sshCommand` del clon). No pasa por Actions.
-- `known-hosts` (opcional) evita el `ssh-keyscan`; recomendado en producción.
+- `DEPLOY_KNOWN_HOSTS` (opcional) evita el `ssh-keyscan`; recomendado en producción.
 - En el modelo con GHCR: el job de build necesita `permissions: packages: write` y el servidor
   un token `read:packages` (`GHCR_READ_TOKEN`).
 
