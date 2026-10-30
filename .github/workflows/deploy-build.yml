@@ -138,6 +138,11 @@ jobs:
 
           ENV_ARG=""
           if [ -n "$ENV_FILE" ]; then
+            if ! $SUDO test -r "$ENV_FILE"; then
+              echo "ERROR: env file no legible por el usuario de deploy: $ENV_FILE" >&2
+              echo "Revisa owner/grupo/permisos (ej. root:deploy 640 en /etc/hexalis)." >&2
+              exit 1
+            fi
             ENV_ARG="--env-file $ENV_FILE"
           fi
 
