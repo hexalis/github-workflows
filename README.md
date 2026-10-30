@@ -53,7 +53,7 @@ jobs:
       dockerfile: "Dockerfile"
       context: "."
       ports: "8000:8000"
-      env-file: ${{ vars.DEPLOY_ENV_FILE }}
+      env-file: "/etc/hexalis/nasa-api.env"
       health-url: "http://127.0.0.1:8000/health"
     secrets:
       ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
@@ -65,7 +65,7 @@ jobs:
 | Tipo | Ejemplos | Dónde se configura |
 |---|---|---|
 | `inputs` | versión Python, comando de tests, puertos, nombre de contenedor | en el YAML del caller (`with:`) |
-| `vars` | `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_PATH`, `DEPLOY_ENV_FILE` | Settings → Variables del repo/org |
+| `vars` | `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_PATH`, `DEPLOY_ENV_FILE` (opcional) | Settings → Variables del repo/org |
 | `secrets` | `DEPLOY_SSH_KEY`, `DEPLOY_KNOWN_HOSTS` (opcional) | Settings → Secrets del repo/org |
 
 - En este modelo **no hay token de GHCR**: el deploy construye desde el repo en el VPS.
@@ -82,7 +82,8 @@ jobs:
 - Docker instalado y el usuario de deploy con acceso (`docker` group o `use-sudo: true`).
 - `git` instalado y clon del repo en `remote-path`.
 - Deploy key de solo lectura configurada.
-- `.env` con secretos fuera del repo (ruta en `env-file`).
+- Secretos **fuera del home y del repo**: por ejemplo `/etc/hexalis/nasa-api.env`, owner
+  `root:deploy` y modo `640` (el usuario de deploy solo lee). Nunca en `/srv` público.
 - `curl` disponible para el healthcheck.
 
 ## Versionado
