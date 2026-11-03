@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       package-manager:
-        description: "pnpm, npm or yarn"
+        description: "pnpm, npm, yarn or none (static site without a Node build)"
         type: string
         default: "pnpm"
       node-version:
@@ -52,12 +52,14 @@ jobs:
       - uses: actions/checkout@v4
       - if: inputs.package-manager == 'pnpm'
         uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - if: inputs.package-manager != 'none'
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node-version }}
           cache: ${{ inputs.package-manager }}
           cache-dependency-path: ${{ inputs.working-directory }}/${{ inputs.package-manager == 'pnpm' && 'pnpm-lock.yaml' || inputs.package-manager == 'npm' && 'package-lock.json' || 'yarn.lock' }}
       - name: Install
+        if: inputs.package-manager != 'none'
         shell: bash
         env:
           INSTALL_COMMAND: ${{ inputs.install-command }}
