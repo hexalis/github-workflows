@@ -1,0 +1,187 @@
+name: Node CI
+
+on:
+  workflow_call:
+    inputs:
+      package-manager:
+        description: "pnpm, npm or yarn"
+        type: string
+        default: "pnpm"
+      node-version:
+        description: "Node.js version"
+        type: string
+        default: "22"
+      working-directory:
+        description: "Directory containing package.json"
+        type: string
+        default: "."
+      install-command:
+        description: "Override the install command"
+        type: string
+        default: ""
+      lint-command:
+        description: "Lint command (optional)"
+        type: string
+        default: ""
+      format-command:
+        description: "Format check command (optional)"
+        type: string
+        default: ""
+      typecheck-command:
+        description: "Typecheck command (optional)"
+        type: string
+        default: ""
+      test-command:
+        description: "Test command (optional)"
+        type: string
+        default: ""
+      build-command:
+        description: "Build command (optional)"
+        type: string
+        default: ""
+      e2e-install-command:
+        description: "Install E2E dependencies (optional)"
+        type: string
+        default: ""
+      e2e-command:
+        description: "Run E2E tests (optional)"
+        type: string
+        default: ""
+      e2e-artifact-path:
+        description: "Artifact path to upload on E2E failure"
+        type: string
+        default: "playwright-report"
+      security-command:
+        description: "Security scan command (optional)"
+        type: string
+        default: ""
+      dependency-review:
+        description: "Run actions/dependency-review-action on pull requests"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@v4
+      - if: inputs.package-manager == 'pnpm'
+        uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: ${{ inputs.package-manager }}
+          cache-dependency-path: ${{ inputs.working-directory }}/${{ inputs.package-manager == 'pnpm' && 'pnpm-lock.yaml' || inputs.package-manager == 'npm' && 'package-lock.json' || 'yarn.lock' }}
+      - name: Install
+        shell: bash
+        env:
+          INSTALL_COMMAND: ${{ inputs.install-command }}
+          PACKAGE_MANAGER: ${{ inputs.package-manager }}
+        run: |
+          if [ -n "$INSTALL_COMMAND" ]; then
+            eval "$INSTALL_COMMAND"
+          else
+            case "$PACKAGE_MANAGER" in
+              pnpm) pnpm install --frozen-lockfile ;;
+              npm) npm ci ;;
+              yarn) yarn install --frozen-lockfile ;;
+              *) echo "Unsupported package manager: $PACKAGE_MANAGER" >&2; exit 1 ;;
+            esac
+          fi
+      - name: Lint
+        if: inputs.lint-command != ''
+        run: ${{ inputs.lint-command }}
+      - name: Format
+        if: inputs.format-command != ''
+        run: ${{ inputs.format-command }}
+      - name: Typecheck
+        if: inputs.typecheck-command != ''
+        run: ${{ inputs.typecheck-command }}
+      - name: Test
+        if: inputs.test-command != ''
+        run: ${{ inputs.test-command }}
+      - name: Build
+        if: inputs.build-command != ''
+        run: ${{ inputs.build-command }}
+
+  e2e:
+    name: E2E
+    if: inputs.e2e-command != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@v4
+      - if: inputs.package-manager == 'pnpm'
+        uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: ${{ inputs.package-manager }}
+          cache-dependency-path: ${{ inputs.working-directory }}/${{ inputs.package-manager == 'pnpm' && 'pnpm-lock.yaml' || inputs.package-manager == 'npm' && 'package-lock.json' || 'yarn.lock' }}
+      - name: Install
+        shell: bash
+        env:
+          INSTALL_COMMAND: ${{ inputs.install-command }}
+          PACKAGE_MANAGER: ${{ inputs.package-manager }}
+        run: |
+          if [ -n "$INSTALL_COMMAND" ]; then
+            eval "$INSTALL_COMMAND"
+          else
+            case "$PACKAGE_MANAGER" in
+              pnpm) pnpm install --frozen-lockfile ;;
+              npm) npm ci ;;
+              yarn) yarn install --frozen-lockfile ;;
+              *) echo "Unsupported package manager: $PACKAGE_MANAGER" >&2; exit 1 ;;
+            esac
+          fi
+      - name: Build
+        if: inputs.build-command != ''
+        run: ${{ inputs.build-command }}
+      - name: Install E2E dependencies
+        if: inputs.e2e-install-command != ''
+        run: ${{ inputs.e2e-install-command }}
+      - name: E2E
+        run: ${{ inputs.e2e-command }}
+      - if: failure() && inputs.e2e-artifact-path != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-report
+          path: ${{ inputs.working-directory }}/${{ inputs.e2e-artifact-path }}
+          retention-days: 7
+
+  security:
+    name: Security
+    if: inputs.security-command != '' || inputs.dependency-review
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - if: inputs.package-manager == 'pnpm'
+        uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+      - name: Security scan
+        if: inputs.security-command != ''
+        run: ${{ inputs.security-command }}
+      - if: inputs.dependency-review && github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@v5

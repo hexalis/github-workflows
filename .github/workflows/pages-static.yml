@@ -1,0 +1,97 @@
+name: Static site to GitHub Pages
+
+on:
+  workflow_call:
+    inputs:
+      package-manager:
+        description: "pnpm, npm or yarn"
+        type: string
+        default: "pnpm"
+      node-version:
+        description: "Node.js version"
+        type: string
+        default: "22"
+      working-directory:
+        description: "Directory containing package.json"
+        type: string
+        default: "."
+      install-command:
+        description: "Override the install command"
+        type: string
+        default: ""
+      build-command:
+        description: "Build command"
+        required: true
+        type: string
+      output-path:
+        description: "Build output directory, relative to working-directory"
+        required: true
+        type: string
+      site-url:
+        description: "Optional SITE_URL for the build"
+        type: string
+        default: ""
+      storybook-avatar-url:
+        description: "Optional STORYBOOK_AVATAR_URL for Storybook builds"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@v4
+      - if: inputs.package-manager == 'pnpm'
+        uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: ${{ inputs.package-manager }}
+          cache-dependency-path: ${{ inputs.working-directory }}/${{ inputs.package-manager == 'pnpm' && 'pnpm-lock.yaml' || inputs.package-manager == 'npm' && 'package-lock.json' || 'yarn.lock' }}
+      - name: Install
+        shell: bash
+        env:
+          INSTALL_COMMAND: ${{ inputs.install-command }}
+          PACKAGE_MANAGER: ${{ inputs.package-manager }}
+        run: |
+          if [ -n "$INSTALL_COMMAND" ]; then
+            eval "$INSTALL_COMMAND"
+          else
+            case "$PACKAGE_MANAGER" in
+              pnpm) pnpm install --frozen-lockfile ;;
+              npm) npm ci ;;
+              yarn) yarn install --frozen-lockfile ;;
+              *) echo "Unsupported package manager: $PACKAGE_MANAGER" >&2; exit 1 ;;
+            esac
+          fi
+      - id: pages
+        uses: actions/configure-pages@v5
+      - name: Build
+        env:
+          BASE_PATH: ${{ steps.pages.outputs.base_path }}
+          STORYBOOK_BASE_PATH: ${{ steps.pages.outputs.base_path }}
+          SITE_URL: ${{ inputs.site-url }}
+          STORYBOOK_AVATAR_URL: ${{ inputs.storybook-avatar-url }}
+        run: ${{ inputs.build-command }}
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ inputs.working-directory }}/${{ inputs.output-path }}
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
