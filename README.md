@@ -23,10 +23,9 @@ name: CI/CD
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop, qa]
   pull_request:
-    branches: [main]
-  workflow_dispatch:
+    branches: [main, develop, qa]
 
 permissions:
   contents: read
@@ -41,32 +40,27 @@ jobs:
 
   deploy:
     needs: ci
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request'
     uses: hexalis/github-workflows/.github/workflows/deploy-build.yml@main
     with:
-      host: ${{ vars.DEPLOY_HOST }}
-      user: ${{ vars.DEPLOY_USER }}
-      remote-path: ${{ vars.DEPLOY_PATH }}
-      branch: main
-      container-name: nasa-api
-      image-tag: nasa-api:latest
-      dockerfile: "Dockerfile"
-      context: "."
-      ports: "8000:8000"
-      env-file: "/etc/hexalis/nasa-api.env"
-      health-url: "http://127.0.0.1:8000/health"
+      environment: ${{ github.ref_name == 'main' && 'production' || github.ref_name }}
+      branch: ${{ github.ref_name }}
     secrets:
       ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
       known-hosts: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
 ```
 
+La configuración del servidor vive en el **GitHub Environment** que se pasa en
+`environment`. El workflow lee `vars.DEPLOY_*` dentro del job, donde el environment ya está
+activo.
+
 ## Variables vs. secrets
 
 | Tipo | Ejemplos | Dónde se configura |
 |---|---|---|
-| `inputs` | versión Python, comando de tests, puertos, nombre de contenedor | en el YAML del caller (`with:`) |
-| `vars` | `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_PATH`, `DEPLOY_ENV_FILE` (opcional) | Settings → Variables del repo/org |
-| `secrets` | `DEPLOY_SSH_KEY`, `DEPLOY_KNOWN_HOSTS` (opcional) | Settings → Secrets del repo/org |
+| `inputs` | `environment`, `branch`, `dockerfile`, `context` | en el YAML del caller (`with:`) |
+| `vars` | `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_REMOTE_PATH`, `DEPLOY_CONTAINER`, `DEPLOY_PORTS`, `DEPLOY_ENV_FILE`, `DEPLOY_HEALTH_URL` | GitHub Environments (o repo/org para los comunes) |
+| `secrets` | `DEPLOY_SSH_KEY`, `DEPLOY_KNOWN_HOSTS` (opcional) | Settings → Secrets del repo/org o del environment |
 
 - En este modelo **no hay token de GHCR**: el deploy construye desde el repo en el VPS.
 - El servidor necesita, además, una **deploy key de solo lectura** para hacer `git fetch`
@@ -93,26 +87,25 @@ En producción, en lugar de `@main` conviene etiquetar este repo (`v1`, `v1.2.0`
 
 ## Multiambiente
 
-El mismo `deploy-build.yml` sirve para `develop`, `qa` y `production`: se llama una vez por
-rama con distinto `remote-path`, `container-name`, `image-tag`, `ports` y `env-file`.
-Ejemplo de patrón:
+`deploy-build.yml` recibe **un environment** y lee toda la configuración del servidor desde
+las variables de ese environment. El caller tiene un solo job de deploy; no hay tres bloques.
 
-```yaml
-jobs:
-  deploy-develop:
-    if: github.ref == 'refs/heads/develop'
-    uses: hexalis/github-workflows/.github/workflows/deploy-build.yml@main
-    with:
-      remote-path: /home/user/app-develop
-      branch: develop
-      container-name: app-develop
-      ports: "127.0.0.1:8001:8000"
-      # ...
-  # deploy-qa y deploy-prod análogos
-```
+| Rama | Environment | Variables propias |
+|---|---|---|
+| `develop` | `develop` | `DEPLOY_REMOTE_PATH`, `DEPLOY_CONTAINER`, `DEPLOY_IMAGE_TAG`, `DEPLOY_PORTS`, `DEPLOY_ENV_FILE`, `DEPLOY_HEALTH_URL` |
+| `qa` | `qa` | las mismas, con valores de QA |
+| `main` | `production` | las mismas, con valores de producción |
+
+Variables comunes (repo u organización): `DEPLOY_HOST`, `DEPLOY_USER`, y opcionalmente
+`DEPLOY_SSH_PORT`. Secretos: `DEPLOY_SSH_KEY` (obligatorio) y `DEPLOY_KNOWN_HOSTS`
+(opcional; si falta se usa `ssh-keyscan`).
+
+Cada environment puede tener una **deployment branch policy** para que solo su rama pueda
+desplegarlo. En `production` se pueden añadir **required reviewers** si el plan de GitHub lo
+permite.
 
 - Los puertos deben publicarse en `127.0.0.1` si nginx hace proxy.
 - Para saltar tests: variable `SKIP_TESTS=true` en el caller (condición en el job de CI).
 - Si el frontend es estático (sin Dockerfile), se puede servir con nginx y un workflow de
   `git pull`/rsync; si tiene Dockerfile (Node + nginx), reutiliza `deploy-build.yml` igual que
-  el backend.
+  el backend, con sus propias variables de environment.
