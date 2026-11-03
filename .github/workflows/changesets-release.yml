@@ -1,0 +1,102 @@
+name: Changesets release (stable)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "GitHub Environment that holds NPM_PUBLISH and NPM_TOKEN"
+        required: true
+        type: string
+      node-version:
+        description: "Node.js version"
+        type: string
+        default: "22"
+      working-directory:
+        description: "Directory containing package.json"
+        type: string
+        default: "."
+      version-command:
+        description: "Command that versions packages"
+        type: string
+        default: "pnpm version-packages"
+      publish-command:
+        description: "Command that builds and publishes packages"
+        type: string
+        default: "pnpm release"
+      auth-check-command:
+        description: "Optional npm auth preflight command"
+        type: string
+        default: ""
+      npm-scope:
+        description: "npm scope passed to the auth check"
+        type: string
+        default: "hexalis"
+      title:
+        description: "Version pull request title"
+        type: string
+        default: "chore: version packages"
+      commit:
+        description: "Version commit message"
+        type: string
+        default: "chore: version packages"
+    secrets:
+      npm-token:
+        required: true
+      github-token:
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: ${{ inputs.environment }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Publishing gate
+        id: gate
+        env:
+          NPM_PUBLISH: ${{ vars.NPM_PUBLISH }}
+          HAS_TOKEN: ${{ secrets.npm-token != '' }}
+        run: |
+          if [ "$NPM_PUBLISH" = "true" ] && [ "$HAS_TOKEN" = "true" ]; then
+            echo "open=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "open=false" >> "$GITHUB_OUTPUT"
+            echo "Publishing is off for environment ${{ inputs.environment }}: nothing to do."
+          fi
+      - if: steps.gate.outputs.open == 'true'
+        uses: actions/checkout@v4
+      - if: steps.gate.outputs.open == 'true'
+        uses: pnpm/action-setup@v4
+      - if: steps.gate.outputs.open == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - if: steps.gate.outputs.open == 'true'
+        run: pnpm install --frozen-lockfile
+      - name: Check the npm token
+        if: steps.gate.outputs.open == 'true' && inputs.auth-check-command != ''
+        run: ${{ inputs.auth-check-command }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.npm-token }}
+          NPM_SCOPE: ${{ inputs.npm-scope }}
+      - if: steps.gate.outputs.open == 'true'
+        uses: changesets/action@v1
+        with:
+          github-token: ${{ secrets.github-token || github.token }}
+          cwd: ${{ inputs.working-directory }}
+          version: ${{ inputs.version-command }}
+          publish: ${{ inputs.publish-command }}
+          title: ${{ inputs.title }}
+          commit: ${{ inputs.commit }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.github-token || github.token }}
+          NODE_AUTH_TOKEN: ${{ secrets.npm-token }}

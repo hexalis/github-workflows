@@ -1,0 +1,56 @@
+name: Changeset check
+
+on:
+  workflow_call:
+    inputs:
+      package-paths:
+        description: "Paths whose changes require a changeset"
+        type: string
+        default: "packages/"
+      changeset-dir:
+        description: "Directory containing changeset files"
+        type: string
+        default: ".changeset"
+      skip-label:
+        description: "Pull request label that skips the check"
+        type: string
+        default: "skip-changeset"
+      working-directory:
+        description: "Directory containing the package paths"
+        type: string
+        default: "."
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Changeset
+    if: >-
+      github.event_name == 'pull_request' &&
+      !startsWith(github.head_ref, 'changeset-release/') &&
+      !contains(github.event.pull_request.labels.*.name, inputs.skip-label)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check changeset
+        shell: bash
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          PACKAGE_PATHS: ${{ inputs.package-paths }}
+          CHANGESET_DIR: ${{ inputs.changeset-dir }}
+        run: |
+          if git diff --quiet "origin/${{ github.base_ref }}...HEAD" -- "$PACKAGE_PATHS"; then
+            echo "No published package changes; changeset not required."
+            exit 0
+          fi
+
+          if find "$CHANGESET_DIR" -maxdepth 1 -name '*.md' ! -name 'README.md' | grep -q .; then
+            echo "Changeset found."
+            exit 0
+          fi
+
+          echo "::error::This PR changes published packages but has no changeset. Run 'pnpm changeset'."
+          exit 1

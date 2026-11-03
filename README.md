@@ -9,6 +9,11 @@ Se llaman con `uses:` desde cada repo; las diferencias se parametrizan con `inpu
 | Workflow | Qué hace | Cuándo usarlo |
 |---|---|---|
 | `python-ci.yml` | Setup Python + caché pip + instalar + tests | Siempre |
+| `node-ci.yml` | Setup Node + instalar + lint/format/typecheck/test/build; E2E y seguridad opcionales | Repos Node/TS |
+| `changeset-check.yml` | Exige changeset en PRs que tocan paquetes | Repos con Changesets |
+| `changesets-release.yml` | Release estable de Changesets con environment | Paquetes npm con Changesets |
+| `changesets-prerelease.yml` | Snapshot beta/staging de Changesets | Paquetes npm con Changesets |
+| `pages-static.yml` | Build + deploy a GitHub Pages | Sitios estáticos / Storybook |
 | **`deploy-build.yml`** | SSH al VPS → `git fetch/reset` → `docker build` → `docker run` → healthcheck | **Recomendado** si el VPS construye la imagen (sin registry) |
 | `docker-ghcr.yml` | Build y push de imagen a GHCR | Alternativa: artefacto inmutable / varias instancias |
 | `deploy-docker.yml` | SSH → `docker pull` de una imagen publicada → recrear contenedor | Alternativa junto a `docker-ghcr.yml` |
@@ -53,6 +58,65 @@ jobs:
 La configuración del servidor vive en el **GitHub Environment** que se pasa en
 `environment`. El workflow lee `vars.DEPLOY_*` dentro del job, donde el environment ya está
 activo.
+
+## Node CI
+
+```yaml
+jobs:
+  ci:
+    uses: hexalis/github-workflows/.github/workflows/node-ci.yml@main
+    with:
+      package-manager: pnpm
+      install-command: pnpm install --frozen-lockfile
+      lint-command: pnpm lint
+      format-command: pnpm format:check
+      typecheck-command: pnpm typecheck
+      test-command: pnpm test
+      build-command: pnpm build
+```
+
+Para npm cambia `package-manager` y los comandos (`npm ci`, `npm run …`). Los jobs `E2E` y
+`Security` solo se ejecutan si pasas `e2e-command` / `security-command` (o
+`dependency-review: true`).
+
+## Changesets
+
+```yaml
+jobs:
+  changeset:
+    uses: hexalis/github-workflows/.github/workflows/changeset-check.yml@main
+
+  release:
+    uses: hexalis/github-workflows/.github/workflows/changesets-release.yml@main
+    with:
+      environment: stable
+      version-command: pnpm version-packages
+      publish-command: pnpm release
+      auth-check-command: bash scripts/check-npm-auth.sh
+    secrets:
+      npm-token: ${{ secrets.NPM_TOKEN }}
+```
+
+`changesets-prerelease.yml` recibe `environment`, `dist-tag` y opcionalmente
+`build-command`/`auth-check-command`. El environment debe tener `NPM_PUBLISH=true` y el
+secreto `NPM_TOKEN`.
+
+## GitHub Pages
+
+```yaml
+jobs:
+  pages:
+    uses: hexalis/github-workflows/.github/workflows/pages-static.yml@main
+    with:
+      package-manager: pnpm
+      install-command: pnpm install --frozen-lockfile
+      build-command: pnpm build-storybook
+      output-path: apps/storybook/storybook-static
+      storybook-avatar-url: ${{ vars.STORYBOOK_AVATAR_URL }}
+```
+
+El workflow configura `BASE_PATH`, `STORYBOOK_BASE_PATH` y `SITE_URL` antes del build y
+despliega en el environment `github-pages`.
 
 ## Variables vs. secrets
 

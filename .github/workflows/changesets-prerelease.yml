@@ -1,0 +1,101 @@
+name: Changesets prerelease
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "GitHub Environment that holds NPM_PUBLISH and NPM_TOKEN"
+        required: true
+        type: string
+      dist-tag:
+        description: "npm dist-tag for the snapshot (beta, staging...)"
+        required: true
+        type: string
+      node-version:
+        description: "Node.js version"
+        type: string
+        default: "22"
+      working-directory:
+        description: "Directory containing package.json"
+        type: string
+        default: "."
+      build-command:
+        description: "Command that builds the packages"
+        type: string
+        default: "pnpm build"
+      auth-check-command:
+        description: "Optional npm auth preflight command"
+        type: string
+        default: ""
+      npm-scope:
+        description: "npm scope passed to the auth check"
+        type: string
+        default: "hexalis"
+    secrets:
+      npm-token:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  prerelease:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: ${{ inputs.environment }}
+    env:
+      DIST_TAG: ${{ inputs.dist-tag }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Publishing gate
+        id: gate
+        env:
+          NPM_PUBLISH: ${{ vars.NPM_PUBLISH }}
+          HAS_TOKEN: ${{ secrets.npm-token != '' }}
+        run: |
+          if [ "$NPM_PUBLISH" = "true" ] && [ "$HAS_TOKEN" = "true" ]; then
+            echo "open=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "open=false" >> "$GITHUB_OUTPUT"
+            echo "Publishing is off for environment ${{ inputs.environment }}: nothing to do."
+          fi
+      - if: steps.gate.outputs.open == 'true'
+        uses: actions/checkout@v4
+      - if: steps.gate.outputs.open == 'true'
+        uses: pnpm/action-setup@v4
+      - if: steps.gate.outputs.open == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - if: steps.gate.outputs.open == 'true'
+        run: pnpm install --frozen-lockfile
+      - name: Pending changesets
+        id: pending
+        if: steps.gate.outputs.open == 'true'
+        run: |
+          if ls .changeset/*.md 2>/dev/null | grep -qv README.md; then
+            echo "has=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has=false" >> "$GITHUB_OUTPUT"
+            echo "No pending changesets: nothing to publish."
+          fi
+      - name: Snapshot version
+        if: steps.pending.outputs.has == 'true'
+        run: pnpm changeset version --snapshot "$DIST_TAG"
+      - name: Check the npm token
+        if: steps.pending.outputs.has == 'true' && inputs.auth-check-command != ''
+        run: ${{ inputs.auth-check-command }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.npm-token }}
+          NPM_SCOPE: ${{ inputs.npm-scope }}
+      - name: Build and publish
+        if: steps.pending.outputs.has == 'true'
+        run: |
+          ${{ inputs.build-command }}
+          pnpm changeset publish --tag "$DIST_TAG" --no-git-tag
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.npm-token }}
