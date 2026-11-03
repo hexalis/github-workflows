@@ -118,6 +118,19 @@ jobs:
 El workflow configura `BASE_PATH`, `STORYBOOK_BASE_PATH` y `SITE_URL` antes del build y
 despliega en el environment `github-pages`.
 
+Para un sitio estático sin `package.json` usa `package-manager: none`; se omiten
+`pnpm/action-setup`, `setup-node` y la instalación, y solo se ejecuta el build:
+
+```yaml
+jobs:
+  pages:
+    uses: hexalis/github-workflows/.github/workflows/pages-static.yml@main
+    with:
+      package-manager: none
+      build-command: mkdir -p _site && rsync -a --exclude 'scripts/' portal/ _site/ && touch _site/.nojekyll
+      output-path: _site
+```
+
 ## Variables vs. secrets
 
 | Tipo | Ejemplos | Dónde se configura |
