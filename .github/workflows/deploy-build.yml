@@ -3,34 +3,14 @@ name: Deploy from repo (build on server, reusable)
 on:
   workflow_call:
     inputs:
-      host:
-        description: "Host/IP del servidor"
-        required: true
-        type: string
-      user:
-        description: "Usuario SSH"
-        required: true
-        type: string
-      ssh-port:
-        description: "Puerto SSH"
-        type: number
-        default: 22
-      remote-path:
-        description: "Ruta del clon del repo en el servidor"
+      environment:
+        description: "GitHub Environment que contiene las variables DEPLOY_*"
         required: true
         type: string
       branch:
         description: "Rama a desplegar"
-        type: string
-        default: "main"
-      container-name:
-        description: "Nombre del contenedor"
         required: true
         type: string
-      image-tag:
-        description: "Tag local de la imagen (ej. nasa-api:latest)"
-        type: string
-        default: "nasa-api:latest"
       dockerfile:
         description: "Ruta al Dockerfile (relativa a remote-path)"
         type: string
@@ -39,36 +19,12 @@ on:
         description: "Build context (relativo a remote-path)"
         type: string
         default: "."
-      ports:
-        description: "Mapeo de puertos (ej. 8000:8000)"
-        type: string
-        default: "8000:8000"
-      env-file:
-        description: "Ruta del .env en el servidor (opcional)"
-        type: string
-        default: ""
-      health-url:
-        description: "URL de salud a comprobar desde el servidor (opcional)"
-        type: string
-        default: ""
-      use-sudo:
-        description: "Usar sudo para docker (si el usuario no está en el grupo docker)"
-        type: boolean
-        default: false
-      extra-run-args:
-        description: "Argumentos extra para docker run (opcional)"
-        type: string
-        default: ""
-      health-timeout-seconds:
-        description: "Segundos máximos para el healthcheck"
-        type: number
-        default: 120
     secrets:
       ssh-private-key:
         description: "Clave privada SSH (runner → servidor)"
         required: true
       known-hosts:
-        description: "known_hosts del servidor (recomendado; si falta se usa ssh-keyscan)"
+        description: "known_hosts del servidor (opcional; si falta se usa ssh-keyscan)"
         required: false
 
 permissions:
@@ -78,15 +34,18 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    environment: ${{ inputs.environment }}
     steps:
       - name: Prepare SSH
         shell: bash
         env:
           SSH_KEY: ${{ secrets.ssh-private-key }}
           KNOWN_HOSTS: ${{ secrets.known-hosts }}
-          HOST: ${{ inputs.host }}
-          SSH_PORT: ${{ inputs.ssh-port }}
+          HOST: ${{ vars.DEPLOY_HOST }}
+          SSH_PORT: ${{ vars.DEPLOY_SSH_PORT || 22 }}
         run: |
+          : "${SSH_KEY:?ssh-private-key is required}"
+          : "${HOST:?DEPLOY_HOST is required}"
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
@@ -101,23 +60,30 @@ jobs:
       - name: Pull, build and run on server
         shell: bash
         env:
-          HOST: ${{ inputs.host }}
-          USER_NAME: ${{ inputs.user }}
-          SSH_PORT: ${{ inputs.ssh-port }}
-          REMOTE_PATH: ${{ inputs.remote-path }}
+          HOST: ${{ vars.DEPLOY_HOST }}
+          USER_NAME: ${{ vars.DEPLOY_USER }}
+          SSH_PORT: ${{ vars.DEPLOY_SSH_PORT || 22 }}
+          REMOTE_PATH: ${{ vars.DEPLOY_REMOTE_PATH }}
           BRANCH: ${{ inputs.branch }}
-          CONTAINER: ${{ inputs.container-name }}
-          IMAGE_TAG: ${{ inputs.image-tag }}
+          CONTAINER: ${{ vars.DEPLOY_CONTAINER }}
+          IMAGE_TAG: ${{ vars.DEPLOY_IMAGE_TAG }}
           DOCKERFILE: ${{ inputs.dockerfile }}
           CONTEXT: ${{ inputs.context }}
-          PORTS: ${{ inputs.ports }}
-          ENV_FILE: ${{ inputs.env-file }}
-          HEALTH_URL: ${{ inputs.health-url }}
-          USE_SUDO: ${{ inputs.use-sudo }}
-          EXTRA_ARGS: ${{ inputs.extra-run-args }}
-          HEALTH_TIMEOUT: ${{ inputs.health-timeout-seconds }}
+          PORTS: ${{ vars.DEPLOY_PORTS }}
+          ENV_FILE: ${{ vars.DEPLOY_ENV_FILE }}
+          HEALTH_URL: ${{ vars.DEPLOY_HEALTH_URL }}
+          USE_SUDO: ${{ vars.DEPLOY_USE_SUDO || 'false' }}
+          EXTRA_ARGS: ${{ vars.DEPLOY_EXTRA_RUN_ARGS }}
+          HEALTH_TIMEOUT: ${{ vars.DEPLOY_HEALTH_TIMEOUT_SECONDS || 120 }}
         run: |
           set -euo pipefail
+          : "${HOST:?DEPLOY_HOST is required}"
+          : "${USER_NAME:?DEPLOY_USER is required}"
+          : "${REMOTE_PATH:?DEPLOY_REMOTE_PATH is required}"
+          : "${CONTAINER:?DEPLOY_CONTAINER is required}"
+          : "${IMAGE_TAG:?DEPLOY_IMAGE_TAG is required}"
+          : "${PORTS:?DEPLOY_PORTS is required}"
+
           SSH="ssh -i ~/.ssh/deploy_key -p $SSH_PORT -o BatchMode=yes -o StrictHostKeyChecking=yes"
           TARGET="$USER_NAME@$HOST"
           if [ "$USE_SUDO" = "true" ]; then SUDO="sudo"; else SUDO=""; fi
