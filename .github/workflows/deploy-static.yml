@@ -1,0 +1,115 @@
+name: Deploy static site (build on runner, sync to server)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "GitHub Environment que contiene las variables DEPLOY_*"
+        required: true
+        type: string
+      source-path:
+        description: "Carpeta local que se publica (ej. _site o dist)"
+        required: false
+        type: string
+        default: "_site"
+      build-command:
+        description: "Comando opcional de build antes de sincronizar"
+        required: false
+        type: string
+        default: ""
+      health-url:
+        description: "URL pública a comprobar después del deploy (opcional)"
+        required: false
+        type: string
+        default: ""
+      health-timeout-seconds:
+        description: "Segundos máximos para el healthcheck"
+        required: false
+        type: number
+        default: 60
+    secrets:
+      ssh-private-key:
+        description: "Clave privada SSH (runner → servidor)"
+        required: true
+      known-hosts:
+        description: "known_hosts del servidor (recomendado)"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Build static site
+        if: ${{ inputs.build-command != '' }}
+        shell: bash
+        env:
+          DEPLOY_ENVIRONMENT: ${{ inputs.environment }}
+        run: ${{ inputs.build-command }}
+
+      - name: Prepare SSH
+        shell: bash
+        env:
+          SSH_KEY: ${{ secrets.ssh-private-key }}
+          KNOWN_HOSTS: ${{ secrets.known-hosts }}
+          HOST: ${{ vars.DEPLOY_HOST }}
+          SSH_PORT: ${{ vars.DEPLOY_SSH_PORT || 22 }}
+        run: |
+          : "${SSH_KEY:?ssh-private-key is required}"
+          : "${HOST:?DEPLOY_HOST is required}"
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          if [ -n "${KNOWN_HOSTS:-}" ]; then
+            printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          fi
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Sync static files
+        shell: bash
+        env:
+          HOST: ${{ vars.DEPLOY_HOST }}
+          USER_NAME: ${{ vars.DEPLOY_USER }}
+          SSH_PORT: ${{ vars.DEPLOY_SSH_PORT || 22 }}
+          REMOTE_PATH: ${{ vars.DEPLOY_REMOTE_PATH }}
+          SOURCE_PATH: ${{ inputs.source-path }}
+          HEALTH_URL: ${{ inputs.health-url || vars.DEPLOY_HEALTH_URL }}
+          HEALTH_TIMEOUT: ${{ inputs.health-timeout-seconds }}
+        run: |
+          set -euo pipefail
+          : "${HOST:?DEPLOY_HOST is required}"
+          : "${USER_NAME:?DEPLOY_USER is required}"
+          : "${REMOTE_PATH:?DEPLOY_REMOTE_PATH is required}"
+          test -d "$SOURCE_PATH" || { echo "source path not found: $SOURCE_PATH" >&2; exit 1; }
+
+          SSH="ssh -i ~/.ssh/deploy_key -p $SSH_PORT -o BatchMode=yes -o StrictHostKeyChecking=yes"
+          TARGET="$USER_NAME@$HOST"
+
+          $SSH "$TARGET" "mkdir -p '$REMOTE_PATH'"
+          rsync -az --delete -e "$SSH" "$SOURCE_PATH/" "$TARGET:$REMOTE_PATH/"
+          $SSH "$TARGET" "find '$REMOTE_PATH' -type d -exec chmod 755 {} +; find '$REMOTE_PATH' -type f -exec chmod 644 {} +"
+
+          if [ -n "${HEALTH_URL:-}" ]; then
+            for i in $(seq 1 "$HEALTH_TIMEOUT"); do
+              if curl -fsS "$HEALTH_URL" >/dev/null 2>&1; then
+                echo "healthy after ${i}s"
+                exit 0
+              fi
+              sleep 1
+            done
+            echo "healthcheck failed after ${HEALTH_TIMEOUT}s: $HEALTH_URL" >&2
+            exit 1
+          fi
+
+          echo "static site deployed to $REMOTE_PATH"

@@ -15,6 +15,7 @@ Se llaman con `uses:` desde cada repo; las diferencias se parametrizan con `inpu
 | `changesets-prerelease.yml` | Snapshot beta/staging de Changesets | Paquetes npm con Changesets |
 | `pages-static.yml` | Build + deploy a GitHub Pages | Sitios estáticos / Storybook |
 | **`deploy-build.yml`** | SSH al VPS → `git fetch/reset` → `docker build` → `docker run` → healthcheck | **Recomendado** si el VPS construye la imagen (sin registry) |
+| **`deploy-static.yml`** | Build opcional en el runner → `rsync` de una carpeta al VPS → healthcheck | Sitios estáticos (POC, Next export, Storybook) |
 | `docker-ghcr.yml` | Build y push de imagen a GHCR | Alternativa: artefacto inmutable / varias instancias |
 | `deploy-docker.yml` | SSH → `docker pull` de una imagen publicada → recrear contenedor | Alternativa junto a `docker-ghcr.yml` |
 
@@ -58,6 +59,29 @@ jobs:
 La configuración del servidor vive en el **GitHub Environment** que se pasa en
 `environment`. El workflow lee `vars.DEPLOY_*` dentro del job, donde el environment ya está
 activo.
+
+## Sitio estático
+
+Para una POC o un frontend exportado sin contenedor:
+
+```yaml
+jobs:
+  deploy:
+    uses: hexalis/github-workflows/.github/workflows/deploy-static.yml@main
+    with:
+      environment: ${{ github.ref_name == 'main' && 'production' || github.ref_name }}
+      source-path: _site
+      build-command: |
+        mkdir -p _site
+        rsync -a --exclude 'scripts/' portal/ _site/
+        printf 'window.ETD_CONFIG = { environment: "%s", apiBase: "/api" };\n' "$DEPLOY_ENVIRONMENT" > _site/env.js
+    secrets:
+      ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+      known-hosts: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+```
+
+Variables del environment: `DEPLOY_REMOTE_PATH`, `DEPLOY_HEALTH_URL` (opcional). Variables
+comunes: `DEPLOY_HOST`, `DEPLOY_USER` y, opcionalmente, `DEPLOY_SSH_PORT`.
 
 ## Node CI
 
