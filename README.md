@@ -51,6 +51,8 @@ jobs:
     with:
       environment: ${{ github.ref_name == 'main' && 'production' || github.ref_name }}
       branch: ${{ github.ref_name }}
+      docker-network: hexalis
+      migrate-command: "alembic -c backend/alembic.ini upgrade head"
     secrets:
       ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
       known-hosts: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
@@ -159,7 +161,7 @@ jobs:
 
 | Tipo | Ejemplos | Dónde se configura |
 |---|---|---|
-| `inputs` | `environment`, `branch`, `dockerfile`, `context` | en el YAML del caller (`with:`) |
+| `inputs` | `environment`, `branch`, `dockerfile`, `context`, `docker-network`, `migrate-command` | en el YAML del caller (`with:`) |
 | `vars` | `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_REMOTE_PATH`, `DEPLOY_CONTAINER`, `DEPLOY_PORTS`, `DEPLOY_ENV_FILE`, `DEPLOY_HEALTH_URL` | GitHub Environments (o repo/org para los comunes) |
 | `secrets` | `DEPLOY_SSH_KEY`, `DEPLOY_KNOWN_HOSTS` (opcional) | Settings → Secrets del repo/org o del environment |
 
